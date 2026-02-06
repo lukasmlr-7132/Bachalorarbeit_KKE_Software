@@ -18,13 +18,12 @@
 /* USER CODE END Header */
 
 /* Includes ------------------------------------------------------------------*/
-#include <periphals.h>
 #include "main.h"
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 /* USER CODE END Includes */
-
+#include "periphals.h"
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN TD */
 
@@ -45,6 +44,12 @@
 extern volatile uint32_t heartbeat_counter;
 extern volatile uint32_t freq_counter;
 extern volatile uint32_t Stepper_1_prescaler;
+extern volatile uint32_t flowmeter_outlet_counter;
+extern volatile uint32_t flowmeter_regeneration_counter;
+
+extern flowmeter Flowmeter_Outlet;
+extern flowmeter Flowmeter_Regeneration;
+
 extern stepper Stepper_1;
 extern uint8_t beep;
 /* USER CODE END PV */
@@ -62,6 +67,7 @@ extern uint8_t beep;
 /* External variables --------------------------------------------------------*/
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim10;
+extern UART_HandleTypeDef huart4;
 /* USER CODE BEGIN EV */
 
 /* USER CODE END EV */
@@ -270,11 +276,39 @@ void TIM1_UP_TIM10_IRQHandler(void) {
 			freq_counter++;
 		}
 	}
+
+	if (flowmeter_outlet_counter >= Flowmeter_Outlet.psc) {
+		//stepper_tick(&Stepper_1);
+		flowmeter_outlet_counter = 0;
+	} else {
+		flowmeter_outlet_counter++;
+	}
+
+	if (flowmeter_regeneration_counter >= Flowmeter_Regeneration.psc) {
+		//stepper_tick(&Stepper_1);
+		flowmeter_regeneration_counter = 0;
+	} else {
+		flowmeter_regeneration_counter++;
+	}
+
 	/* USER CODE END TIM1_UP_TIM10_IRQn 0 */
 	HAL_TIM_IRQHandler(&htim1);
 	HAL_TIM_IRQHandler(&htim10);
 	/* USER CODE BEGIN TIM1_UP_TIM10_IRQn 1 */
 	/* USER CODE END TIM1_UP_TIM10_IRQn 1 */
+}
+
+/**
+ * @brief This function handles UART4 global interrupt.
+ */
+void UART4_IRQHandler(void) {
+	/* USER CODE BEGIN UART4_IRQn 0 */
+
+	/* USER CODE END UART4_IRQn 0 */
+	HAL_UART_IRQHandler(&huart4);
+	/* USER CODE BEGIN UART4_IRQn 1 */
+
+	/* USER CODE END UART4_IRQn 1 */
 }
 
 /* USER CODE BEGIN 1 */

@@ -31,7 +31,7 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "ModbusRTU_Registers.h"
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
@@ -101,7 +101,15 @@ void Error_Handler(void);
 #define RS485_Direction_GPIO_Port GPIOD
 
 /* USER CODE BEGIN Private defines */
+extern uint16_t discrete_output_coils[(NUM_COILS/16)+1];				// Coils (00001-09999)
+extern uint16_t discrete_input_contact[(NUM_DISCRETE_INPUTS/16)+1];	// Discrete inputs (10001-19999)
+extern int32_t analogue_input_registers[NUM_ANALOGUE_INPUTS];    		// Input registers (30001-39999)
+extern int32_t analogue_holding_registers[NUM_HOLDING_REGISTERS]; 	// Holding registers (40001-49999)
 
+extern volatile uint8_t rx_buffer[MODBUS_MAX_MESSAGE_LENGTH];  // Receive buffer
+extern uint16_t rx_len;
+
+extern UART_HandleTypeDef huart4;
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

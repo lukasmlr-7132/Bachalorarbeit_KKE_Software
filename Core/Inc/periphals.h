@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include "stm32f4xx_hal.h"   // GPIO_TypeDef, HAL_GPIO_WritePin, GPIO_PIN_*
 
+//Stepper-Functions-----------------------------------------------------------------------------------------------------------------------
 typedef enum {
 	GB_OK = 0, GB_ERR_NULL, GB_ERR_INVALID, GB_ERR_RANGE, GB_ERR_BUSY
 } GBStatus;
@@ -80,71 +81,33 @@ GBStatus stepper_step_ccw(stepper *self);
 
 void stepper_sound(stepper *self);
 
-//RS485-MODBUSRTU--------------------------------------------------------------------------------------------------
+//ADC-Functions----------------------------------------------------------------------------------------------------
 
-#define MB_MAX_ADU 256
-
-typedef enum {
-	MB_OK = 0,
-	MB_ERR_CRC,
-	MB_ERR_ADDR,
-	MB_ERR_LEN,
-	MB_ERR_FC_UNSUPPORTED,
-	MB_ERR_INTERNAL
-} mb_result_t;
-
-/**
- * Handler-Signatur:
- * - req_pdu zeigt auf [addr][fc][data...], Länge = req_len
- * - resp_pdu: hier baust du die Antwort (OHNE CRC). Gib resp_len zurück.
- * - Rückgabe:
- *   - MB_OK -> Engine hängt CRC an und sendet
- *   - MB_ERR_* -> Engine kann Exception senden (optional) oder ignorieren
- */
-
-typedef mb_result_t (*mb_fc_handler_t)(const uint8_t *req_pdu, uint16_t req_len,
-		uint8_t *resp_pdu, uint16_t *resp_len, void *user_ctx);
+#define ADC_RESOLUTION 4095.0f
+#define REF_Voltage (float) 3.00
 
 typedef struct {
-	UART_HandleTypeDef *huart;
+	float leakage_threshold;
+	float value;
+	uint32_t channel;
+	ADC_HandleTypeDef hadc;
+} conductivity;
 
-	// RS485 DE (optional). Wenn de_port == NULL -> kein DE handling.
-	GPIO_TypeDef *de_port;
-	uint16_t de_pin;
+float ADC_GetVoltage(ADC_HandleTypeDef *hadc, float vref);
+GBStatus conductivity_init(conductivity *self, float leakage_threshold, ADC_HandleTypeDef hadc, uint32_t Channel);
+bool conductivity_level_reached(conductivity *self);
 
-	uint8_t slave_id;
+//Flow-Sensor-Functions--------------------------------------------------------------------------------------------------
 
-	// RX
-	uint8_t rx_buf[MB_MAX_ADU];
-	uint16_t rx_len;
-	volatile uint8_t frame_ready;
+#define TIMER_FREQUENCY 10000
 
-	// Handlers pro Function Code (0..255)
-	mb_fc_handler_t fc_table[256];
-	void *user_ctx;
-} ModbusSlave;
+typedef struct {
+	uint32_t meas_time;
+	uint32_t pulsecount;
+	uint32_t psc;
+	float current_flow;
+} flowmeter;
 
-void mb_init(ModbusSlave *mb, UART_HandleTypeDef *huart, uint8_t slave_id,
-		GPIO_TypeDef *de_port, uint16_t de_pin, void *user_ctx);
-
-void mb_start_rx(ModbusSlave *mb);
-
-void mb_register_fc(ModbusSlave *mb, uint8_t function_code,
-		mb_fc_handler_t handler);
-
-/**
- * Call from HAL callback:
- * HAL_UARTEx_RxEventCallback(huart, Size)
- */
-void mb_on_rx_idle(ModbusSlave *mb, UART_HandleTypeDef *huart, uint16_t Size);
-
-/**
- * Call in while(1):
- * - verarbeitet ein fertiges Frame und sendet ggf. Antwort
- */
-void mb_poll(ModbusSlave *mb);
-
-void sendDataRS485int(uint8_t *data);
-void HAL_UartEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size);
+GBStatus flowmeter_init(conductivity *self, uint32_t meas_time);
 
 #endif /* INC_STEPPER_H */

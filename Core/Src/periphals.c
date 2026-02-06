@@ -13,15 +13,6 @@
 //Stepper_Motor----------------------------------------------------------------------------------------------------------------------
 uint8_t beep = 1;
 
-//RS485
-#define RS485DATALEN 1
-
-uint8_t RS485intTXData[RS485DATALEN];
-uint8_t RS485intRXData[RS485DATALEN];
-
-extern UART_HandleTypeDef huart4;
-
-
 static const uint8_t Fullstep_Dualphase[4] = { 0b1001, // A1 + B2
 		0b1010, // B2 + A3
 		0b0110, // A3 + B4
@@ -114,11 +105,11 @@ void stepper_sound(stepper *self) {
 	stepper_set_drivefreq_high(self);
 
 	// kurzes Ziel, damit es nur "piept" und nicht wegfährt
-	self->target_position = 2000;
+	self->target_position = 4000;
 	self->mode = STEPPER_TARGET_OPERATION;
 	self->start_sequence = 0;               // nur zur Sicherheit
 
-	HAL_Delay(800);
+	HAL_Delay(600);
 
 	self->drive_frequency_high_hz = 10000;   // 4..10 kHz testen
 	stepper_set_drivefreq_high(self);
@@ -128,19 +119,19 @@ void stepper_sound(stepper *self) {
 	self->mode = STEPPER_TARGET_OPERATION;
 	self->start_sequence = 0;               // nur zur Sicherheit
 
-	HAL_Delay(800);
+	HAL_Delay(600);
+	/*
+	self->drive_frequency_high_hz = 5000;   // 4..10 kHz testen
+	stepper_set_drivefreq_high(self);
+
+	// kurzes Ziel, damit es nur "piept" und nicht wegfährt
+	self->target_position = 4000;
+	self->mode = STEPPER_TARGET_OPERATION;
+	self->start_sequence = 0;               // nur zur Sicherheit
+
+	HAL_Delay(1000);
 
 	/*
-	 self->drive_frequency_high_hz = 2000;   // 4..10 kHz testen
-	 stepper_set_drivefreq_high(self);
-
-	 // kurzes Ziel, damit es nur "piept" und nicht wegfährt
-	 self->target_position = 0;
-	 self->mode = STEPPER_TARGET_OPERATION;
-	 self->start_sequence = 0;               // nur zur Sicherheit
-
-	 HAL_Delay(800);
-
 	 self->drive_frequency_high_hz = 1500;   // 4..10 kHz testen
 	 stepper_set_drivefreq_high(self);
 
@@ -320,16 +311,57 @@ void stepper_tick(stepper *self) {
 
 }
 
-//RS485-Communication---------------------------------------------------------------------------------------------------------------
+//Leackage- and Hight-Sensing--------------------------------------------------------------------------------------------------------------
+float ADC_GetVoltage(ADC_HandleTypeDef *hadc, float vref) {
+	uint32_t raw = HAL_ADC_GetValue(hadc);
 
- void sendDataRS485int(uint8_t *data){
- HAL_GPIO_WritePin(RS485_Direction_GPIO_Port, RS485_Direction_Pin, GPIO_PIN_SET); //Pull DE high for TX
- HAL_UART_Transmit(&huart4, data, RS485DATALEN, 500);
- while (__HAL_UART_GET_FLAG(&huart4, UART_FLAG_TC) == RESET) {}
- HAL_GPIO_WritePin(RS485_Direction_GPIO_Port, RS485_Direction_Pin, GPIO_PIN_RESET); //Pull DE low for RX
- }
- void HAL_UartEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size){
- HAL_UARTEx_ReceiveToIdle_IT(&huart4, RS485intRXData, RS485DATALEN);
- }
+	return ((float) raw / (float) ADC_RESOLUTION) * vref;
+}
+
+GBStatus conductivity_init(conductivity *self, float leakage_threshold, ADC_HandleTypeDef hadc, uint32_t Channel) {
+	if (!self) {
+		return GB_ERR_NULL;
+	}
+
+	self->leakage_threshold = leakage_threshold;
+	self->hadc = hadc;
+	self->channel=Channel;
+	self->value = 0.0f;
+
+	return GB_OK;
+}
+
+bool conductivity_level_reached(conductivity *self) {
+	if (!self) {
+		return false;
+	}
+
+	ADC_ChannelConfTypeDef sConfig = { 0 };
+
+	sConfig.Channel = self->channel;
+	sConfig.Rank = 1;
+	sConfig.SamplingTime = ADC_SAMPLETIME_56CYCLES;
+
+	if (HAL_ADC_ConfigChannel(&self->hadc, &sConfig) != HAL_OK) {
+		Error_Handler();
+	}
+
+	HAL_ADC_Start(&self->hadc);
+
+	if (HAL_ADC_PollForConversion(&self->hadc, 10) != HAL_OK) {
+		HAL_ADC_Stop(&self->hadc);
+		return false;
+	}
+
+	self->value = ADC_GetVoltage(&self->hadc, REF_Voltage);
+
+	HAL_ADC_Stop(&self->hadc);
+
+	if (self->value > self->leakage_threshold) {
+		return true;
+	} else {
+		return false;
+	}
+}
 
 //Flow-Sensor------------------------------------------------------------------------------------------------------------------------

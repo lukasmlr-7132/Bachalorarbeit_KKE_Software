@@ -17,11 +17,15 @@
  */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
-#include <periphals.h>
 #include "main.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "ModbusRTU_Registers.h"
+#include "ModbusRTU_Logic.h"
+#include "ModbusRTU_Comm.h"
+#include "periphals.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -31,26 +35,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-typedef struct {
-	uint32_t meas_time;
-	uint32_t pulsecount;
-	float current_flow;
-} flow_sensor;
-
-typedef struct {
-	uint32_t leackage_threshold;
-	uint32_t value;
-	uint8_t threshold_reached;
-} conductivity_sensor;
-
-flow_sensor inlet_flow_sensor;
-flow_sensor regeneratrion_flow_sensor;
-
-conductivity_sensor level_sensing;
-conductivity_sensor leackage;
-extern uint8_t beep;
-
-
 
 /* USER CODE END PD */
 
@@ -65,6 +49,7 @@ ADC_HandleTypeDef hadc2;
 ADC_HandleTypeDef hadc3;
 
 TIM_HandleTypeDef htim1;
+TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim4;
 TIM_HandleTypeDef htim9;
 TIM_HandleTypeDef htim10;
@@ -77,16 +62,29 @@ volatile uint32_t freq_counter = 0;
 volatile uint32_t TWZ_1_pulseCount = 0;
 volatile uint32_t TWZ_2_pulseCount = 0;
 
+extern uint8_t beep;
+stepper Stepper_1;
 StepperPins Stepper_1_Pins = {
 Stepper_A1_uC_GPIO_Port, Stepper_A1_uC_Pin,
 Stepper_A3_uC_GPIO_Port, Stepper_A3_uC_Pin,
 Stepper_B2_uC_GPIO_Port, Stepper_B2_uC_Pin,
 Stepper_B4_uC_GPIO_Port, Stepper_B4_uC_Pin };
 
-stepper Stepper_1;
+conductivity Level_sensing;
+conductivity Leackage;
+volatile float level_voltage_threshold = 2.0;
+volatile float leackage_voltage_threshold = 2.0;
 
-extern uint8_t RS485intTXData;
-extern uint8_t RS485intRXData;
+volatile uint32_t flowmeter_outlet_counter;
+volatile uint32_t flowmeter_regeneration_counter;
+flowmeter Flowmeter_Outlet;
+flowmeter Flowmeter_Regeneration;
+
+uint16_t slave_adress = 0x02;
+bool uart_rx_callback_completed = false;
+uint8_t rx_buffer_temp[MODBUS_MAX_MESSAGE_LENGTH]; // Temporary receive buffer
+uint8_t rx_temp_byte;                           // temporary byte
+uint16_t rx_index = 0;                         // note index
 //volatile uint32_t adc_leackage = 0;
 /* USER CODE END PV */
 
@@ -101,8 +99,9 @@ static void MX_TIM9_Init(void);
 static void MX_TIM10_Init(void);
 static void MX_UART4_Init(void);
 static void MX_ADC3_Init(void);
+static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
-
+uint8_t calcSlaveAddress();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -146,13 +145,31 @@ int main(void) {
 	MX_TIM10_Init();
 	MX_UART4_Init();
 	MX_ADC3_Init();
+	MX_TIM2_Init();
 	/* USER CODE BEGIN 2 */
+	initialize_peripherals();
 
-	//Stepper1 init
+	//Stepper1 Init
 	stepper_init_hardware(&Stepper_1, &Stepper_1_Pins);
 	stepper_init_parameters(&Stepper_1, 200, 80, 10000, 0);
 	uint32_t positions[6] = { 0, 1000, 2000, 3000, 4000, 5000 };
 	//stepper_init_positions(&Stepper_1, positions); //uncomment if removing beep
+
+	//RS485 Init
+
+	analogue_holding_registers[HOLDING_REG_SLAVE_ADDRESS] = slave_adress; // set slave address
+	HAL_UART_Receive_IT(&huart4, &rx_temp_byte, 1); // Pause at a length of 3.5 characters according to the Modbus definition
+	//HAL_UARTEx_ReceiveToIdle_IT(&huart1, rx_buffer_temp, MODBUS_MAX_MESSAGE_LENGTH); // Pause already at a single character length
+
+	//Resetting Buffer
+	memset(rx_buffer, 0, sizeof(rx_buffer));
+	memset(rx_buffer_temp, 0, sizeof(rx_buffer_temp));
+
+//conductivity-Sensing Init
+	conductivity_init(&Leackage, leackage_voltage_threshold, hadc2,
+			ADC_CHANNEL_2);
+	conductivity_init(&Level_sensing, level_voltage_threshold, hadc3,
+			ADC_CHANNEL_10);
 
 	//starting timers
 	HAL_TIM_Base_Start_IT(&htim1);
@@ -160,8 +177,15 @@ int main(void) {
 	HAL_TIM_PWM_Start(&htim9, TIM_CHANNEL_1);
 
 	//starting ADCs
+	HAL_ADC_Start(&hadc1);
 	HAL_ADC_Start(&hadc2);
 	HAL_ADC_Start(&hadc3);
+	/*
+	 if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK)
+	 {
+	 Error_Handler(); // Calibration error
+	 }
+	 */
 
 	//do beep
 	stepper_sound(&Stepper_1);
@@ -174,40 +198,39 @@ int main(void) {
 
 	//make stepper move
 	stepper_set_drivefreq_high(&Stepper_1);
-	//stepper_reference(&Stepper_1);
-	//stepper_set_drivefreq_high(&Stepper_1);
-	//stepper_set_target(&Stepper_1, 3);
-	//HAL_Delay(10000);
-
-	stepper_set_drivefreq_high(&Stepper_1);
 	stepper_set_target(&Stepper_1, 3);
 
-
-	RS485intTXData = 17;
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
 	while (1) {
 
-		sendDataRS485int(&RS485intTXData);
-		HAL_ADC_Start(&hadc2);
-
-		HAL_ADC_PollForConversion(&hadc2, 50);
-		adc_leackage = HAL_ADC_GetValue(&hadc2);
-		if (adc_leackage > 1000) {
-			HAL_GPIO_WritePin(debug_3_GPIO_Port, debug_3_Pin, SET);
-		} else {
-			HAL_GPIO_WritePin(debug_3_GPIO_Port, debug_3_Pin, RESET);
+		if (uart_rx_callback_completed) {
+			modbus_receive_message(&huart4);
+			uart_rx_callback_completed = 0;
 		}
 
-		HAL_ADC_Start(&hadc3);
-		HAL_ADC_PollForConversion(&hadc3, 50);
-		adc_leackage = HAL_ADC_GetValue(&hadc3);
-		if (adc_leackage > 1000) {
-			HAL_GPIO_WritePin(debug_2_GPIO_Port, debug_2_Pin, SET);
+		analogue_input_registers[INPUT_REG_OUTPUT_VOLTAGE_1] = 10000;
+		/*
+		 HAL_ADC_Start(&hadc2);
+		 HAL_ADC_PollForConversion(&hadc2, 50);
+		 adc_leackage = HAL_ADC_GetValue(&hadc2);
+		 */
+		if (conductivity_level_reached(&Leackage)) {
+			HAL_GPIO_WritePin(debug_3_GPIO_Port, debug_3_Pin, RESET);
 		} else {
+			HAL_GPIO_WritePin(debug_3_GPIO_Port, debug_3_Pin, SET);
+		}
+		/*
+		 HAL_ADC_Start(&hadc3);
+		 HAL_ADC_PollForConversion(&hadc3, 50);
+		 adc_leackage = HAL_ADC_GetValue(&hadc3);
+		 */
+		if (conductivity_level_reached(&Level_sensing)) {
 			HAL_GPIO_WritePin(debug_2_GPIO_Port, debug_2_Pin, RESET);
+		} else {
+			HAL_GPIO_WritePin(debug_2_GPIO_Port, debug_2_Pin, SET);
 		}
 
 		/* USER CODE END WHILE */
@@ -450,6 +473,48 @@ static void MX_TIM1_Init(void) {
 }
 
 /**
+ * @brief TIM2 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM2_Init(void) {
+
+	/* USER CODE BEGIN TIM2_Init 0 */
+
+	/* USER CODE END TIM2_Init 0 */
+
+	TIM_ClockConfigTypeDef sClockSourceConfig = { 0 };
+	TIM_MasterConfigTypeDef sMasterConfig = { 0 };
+
+	/* USER CODE BEGIN TIM2_Init 1 */
+
+	/* USER CODE END TIM2_Init 1 */
+	htim2.Instance = TIM2;
+	htim2.Init.Prescaler = 47;
+	htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+	htim2.Init.Period = 65535;
+	htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+	htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+	if (HAL_TIM_Base_Init(&htim2) != HAL_OK) {
+		Error_Handler();
+	}
+	sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+	if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK) {
+		Error_Handler();
+	}
+	sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+	sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+	if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig)
+			!= HAL_OK) {
+		Error_Handler();
+	}
+	/* USER CODE BEGIN TIM2_Init 2 */
+
+	/* USER CODE END TIM2_Init 2 */
+
+}
+
+/**
  * @brief TIM4 Initialization Function
  * @param None
  * @retval None
@@ -606,7 +671,7 @@ static void MX_UART4_Init(void) {
 
 	/* USER CODE END UART4_Init 1 */
 	huart4.Instance = UART4;
-	huart4.Init.BaudRate = 115200;
+	huart4.Init.BaudRate = 19200;
 	huart4.Init.WordLength = UART_WORDLENGTH_8B;
 	huart4.Init.StopBits = UART_STOPBITS_1;
 	huart4.Init.Parity = UART_PARITY_NONE;
@@ -719,6 +784,59 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 		TWZ_2_pulseCount++;
 		//HAL_GPIO_TogglePin(debug_2_GPIO_Port, debug_2_Pin);
 	}
+}
+
+// function for HAL_UARTEx_Receive_IT
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+
+	if (huart->Instance == UART4) {
+		if (rx_index < MODBUS_MAX_MESSAGE_LENGTH) {
+			rx_buffer_temp[rx_index++] = rx_temp_byte;
+		} else {
+			modbus_error_handler(MODBUS_ERR_ILLEGAL_DATA_VALUE);
+			rx_index = 0;
+		}
+
+		__HAL_TIM_SET_COUNTER(&htim2, 0);
+		HAL_TIM_Base_Start_IT(&htim2);
+
+		// get next byte
+		HAL_UART_Receive_IT(&huart4, &rx_temp_byte, 1);
+	}
+}
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+	if (htim->Instance == TIM2) {
+		HAL_TIM_Base_Stop_IT(&htim2);
+		__HAL_TIM_SET_COUNTER(&htim2, 0);
+
+		// Validate the slave address
+		if (rx_buffer_temp[0]
+				== analogue_holding_registers[HOLDING_REG_SLAVE_ADDRESS]
+				|| rx_buffer_temp[0] == 0) {
+			memcpy(rx_buffer, rx_buffer_temp, rx_index);
+			uart_rx_callback_completed = true;
+		}
+
+		memset(rx_buffer_temp, 0, MODBUS_MAX_MESSAGE_LENGTH);
+		rx_len = rx_index;
+		rx_index = 0;
+	}
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
+	if (huart->Instance == UART4) {
+		if (huart->ErrorCode != HAL_UART_ERROR_NONE) {
+			// Handle the error and restart reception
+			HAL_UART_AbortReceive_IT(huart);
+			HAL_GPIO_WritePin(RS485_Direction_GPIO_Port, RS485_Direction_Pin,
+					0);
+			//HAL_UART_Receive_IT(&huart1, &rx_temp_byte, 1); // Restart reception
+			HAL_UARTEx_ReceiveToIdle_IT(huart, rx_buffer_temp,
+			MODBUS_MAX_MESSAGE_LENGTH); // Restart reception
+		}
+	}
+	memset(rx_buffer_temp, 0, sizeof(rx_buffer_temp)); // clear buffer
 }
 /* USER CODE END 4 */
 
