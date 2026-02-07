@@ -7,6 +7,8 @@
 #include "stm32f4xx_hal.h"   // GPIO_TypeDef, HAL_GPIO_WritePin, GPIO_PIN_*
 
 //Stepper-Functions-----------------------------------------------------------------------------------------------------------------------
+#define TIMER_FREQUENCY 10000
+
 typedef enum {
 	GB_OK = 0, GB_ERR_NULL, GB_ERR_INVALID, GB_ERR_RANGE, GB_ERR_BUSY
 } GBStatus;
@@ -99,15 +101,21 @@ bool conductivity_level_reached(conductivity *self);
 
 //Flow-Sensor-Functions--------------------------------------------------------------------------------------------------
 
-#define TIMER_FREQUENCY 10000
+#define FLOW_TIMER_FREQUENCY 10000
 
 typedef struct {
-	uint32_t meas_time;
-	uint32_t pulsecount;
+	uint32_t meas_time; //ms
+	uint32_t pulsecounter;
 	uint32_t psc;
-	float current_flow;
+	float ml_per_pulse;
+	float min_flow; //ml/min
+	float max_flow; //ml/min
+	float current_flow; //ml/min
 } flowmeter;
 
-GBStatus flowmeter_init(conductivity *self, uint32_t meas_time);
+GBStatus flowmeter_init(flowmeter *self, uint32_t meas_time, float ml_per_pulse, float min_flow, float max_flow);
+GBStatus flowmeter_add_pulse(flowmeter *self);
+GBStatus flowmeter_calc_flow (flowmeter *self);
+float flowmeter_get_flow (flowmeter *self); 	// mL/min
 
 #endif /* INC_STEPPER_H */

@@ -121,17 +121,17 @@ void stepper_sound(stepper *self) {
 
 	HAL_Delay(600);
 	/*
-	self->drive_frequency_high_hz = 5000;   // 4..10 kHz testen
-	stepper_set_drivefreq_high(self);
+	 self->drive_frequency_high_hz = 5000;   // 4..10 kHz testen
+	 stepper_set_drivefreq_high(self);
 
-	// kurzes Ziel, damit es nur "piept" und nicht wegfährt
-	self->target_position = 4000;
-	self->mode = STEPPER_TARGET_OPERATION;
-	self->start_sequence = 0;               // nur zur Sicherheit
+	 // kurzes Ziel, damit es nur "piept" und nicht wegfährt
+	 self->target_position = 4000;
+	 self->mode = STEPPER_TARGET_OPERATION;
+	 self->start_sequence = 0;               // nur zur Sicherheit
 
-	HAL_Delay(1000);
+	 HAL_Delay(1000);
 
-	/*
+
 	 self->drive_frequency_high_hz = 1500;   // 4..10 kHz testen
 	 stepper_set_drivefreq_high(self);
 
@@ -318,14 +318,15 @@ float ADC_GetVoltage(ADC_HandleTypeDef *hadc, float vref) {
 	return ((float) raw / (float) ADC_RESOLUTION) * vref;
 }
 
-GBStatus conductivity_init(conductivity *self, float leakage_threshold, ADC_HandleTypeDef hadc, uint32_t Channel) {
+GBStatus conductivity_init(conductivity *self, float leakage_threshold,
+		ADC_HandleTypeDef hadc, uint32_t Channel) {
 	if (!self) {
 		return GB_ERR_NULL;
 	}
 
 	self->leakage_threshold = leakage_threshold;
 	self->hadc = hadc;
-	self->channel=Channel;
+	self->channel = Channel;
 	self->value = 0.0f;
 
 	return GB_OK;
@@ -365,3 +366,93 @@ bool conductivity_level_reached(conductivity *self) {
 }
 
 //Flow-Sensor------------------------------------------------------------------------------------------------------------------------
+
+GBStatus flowmeter_init(flowmeter *self, uint32_t meas_time,     // ms
+		float ml_per_pulse, float min_flow, float max_flow) {
+	if (!self) {
+		return GB_ERR_NULL;
+	}
+
+	/* Grundvalidierung */
+	if (!meas_time) {
+		return GB_ERR_INVALID;
+	}
+	if (ml_per_pulse <= 0.0f) {
+		return GB_ERR_INVALID;
+	}
+	if ((min_flow < 0.0f) || (max_flow < 0.0f)) {
+		return GB_ERR_INVALID;
+	}
+	if ((max_flow > 0.0f) && (min_flow > max_flow)) {
+		return GB_ERR_RANGE;
+	}
+
+	self->meas_time = meas_time;
+	self->ml_per_pulse = ml_per_pulse;
+	self->min_flow = min_flow;
+	self->max_flow = max_flow;
+
+	self->pulsecounter = 0u;
+	self->psc =(uint32_t) (((uint64_t) meas_time * FLOW_TIMER_FREQUENCY) / 1000);
+	self->current_flow = 0.0f;
+
+	return GB_OK;
+}
+
+GBStatus flowmeter_add_pulse(flowmeter *self) {
+	if (!self) {
+		return GB_ERR_NULL;
+	}
+
+	if (self->pulsecounter == UINT32_MAX) {
+		return GB_ERR_RANGE;
+	}
+
+	self->pulsecounter++;
+	return GB_OK;
+}
+
+GBStatus flowmeter_calc_flow(flowmeter *self) {
+	if (!self) {
+		return GB_ERR_NULL;
+	}
+
+	if (!self->meas_time) {
+		return GB_ERR_INVALID;
+	}
+
+	/* Volumen in mL */
+	const float volume_ml = (float) self->pulsecounter * self->ml_per_pulse;
+
+	/* Durchfluss in mL/min */
+	float flow = (volume_ml * 60000.0f) / (float) self->meas_time;
+
+	GBStatus st = GB_OK;
+
+	/* Optional: Clamping auf min/max, aber Wert bleibt gültig */
+	if ((self->min_flow > 0.0f) && (flow < self->min_flow)) {
+		flow = 0;
+		st = GB_ERR_RANGE;
+	}
+
+	if ((self->max_flow > 0.0f) && (flow > self->max_flow)) {
+		flow = self->max_flow;
+		st = GB_ERR_RANGE;
+	}
+
+	self->current_flow = flow;
+
+	/* Messfenster abgeschlossen */
+	self->pulsecounter = 0u;
+
+	return st;
+}
+
+float flowmeter_get_flow(flowmeter *self) /* mL/min */
+{
+	if (!self) {
+		return 0.0f;
+	}
+	return self->current_flow;
+}
+

@@ -43,7 +43,6 @@
 /* USER CODE BEGIN PV */
 extern volatile uint32_t heartbeat_counter;
 extern volatile uint32_t freq_counter;
-extern volatile uint32_t Stepper_1_prescaler;
 extern volatile uint32_t flowmeter_outlet_counter;
 extern volatile uint32_t flowmeter_regeneration_counter;
 
@@ -233,63 +232,6 @@ void EXTI9_5_IRQHandler(void) {
  */
 void TIM1_UP_TIM10_IRQHandler(void) {
 	/* USER CODE BEGIN TIM1_UP_TIM10_IRQn 0 */
-
-	static uint16_t ramp_i = 20;          // zählt 0..100
-	static uint16_t start_psc = 500;      // langsam (anpassen!)
-	static uint16_t target_psc = 1;      // wird beim Start übernommen
-
-	if (beep == 1) {
-
-		// Rampe killen: sofort Zielgeschwindigkeit
-
-		if (freq_counter >= Stepper_1.drive_psc) {
-			stepper_tick(&Stepper_1);
-			freq_counter = 0;
-		} else {
-			freq_counter++;
-		}
-
-	} else {
-		// Start der Rampe
-		if (Stepper_1.start_sequence == 1) {
-			target_psc = Stepper_1.drive_psc;  // Ziel merken
-			Stepper_1.drive_psc = start_psc;   // langsam starten
-			ramp_i = 0;
-			Stepper_1.start_sequence = 0;
-		}
-
-		// Step-Auslösung über Divider
-		if (freq_counter >= Stepper_1.drive_psc) {
-			stepper_tick(&Stepper_1);
-			freq_counter = 1;
-
-			// Rampe: nach JEDEM Schritt 100x schneller werden
-			if (ramp_i < 20) {
-				// linear von start_psc -> target_psc
-				Stepper_1.drive_psc = start_psc
-						- ((start_psc - target_psc) * ramp_i) / 20;
-				ramp_i++;
-			} else {
-				Stepper_1.drive_psc = target_psc; // fertig
-			}
-		} else {
-			freq_counter++;
-		}
-	}
-
-	if (flowmeter_outlet_counter >= Flowmeter_Outlet.psc) {
-		//stepper_tick(&Stepper_1);
-		flowmeter_outlet_counter = 0;
-	} else {
-		flowmeter_outlet_counter++;
-	}
-
-	if (flowmeter_regeneration_counter >= Flowmeter_Regeneration.psc) {
-		//stepper_tick(&Stepper_1);
-		flowmeter_regeneration_counter = 0;
-	} else {
-		flowmeter_regeneration_counter++;
-	}
 
 	/* USER CODE END TIM1_UP_TIM10_IRQn 0 */
 	HAL_TIM_IRQHandler(&htim1);

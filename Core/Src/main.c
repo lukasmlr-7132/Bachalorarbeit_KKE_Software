@@ -101,7 +101,7 @@ static void MX_UART4_Init(void);
 static void MX_ADC3_Init(void);
 static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
-uint8_t calcSlaveAddress();
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -165,12 +165,15 @@ int main(void) {
 	memset(rx_buffer, 0, sizeof(rx_buffer));
 	memset(rx_buffer_temp, 0, sizeof(rx_buffer_temp));
 
-//conductivity-Sensing Init
+	//conductivity-Sensing Init
 	conductivity_init(&Leackage, leackage_voltage_threshold, hadc2,
-			ADC_CHANNEL_2);
+	ADC_CHANNEL_2);
 	conductivity_init(&Level_sensing, level_voltage_threshold, hadc3,
-			ADC_CHANNEL_10);
+	ADC_CHANNEL_10);
 
+	//Flowmeter_init
+	flowmeter_init(&Flowmeter_Regeneration, 500, 3.90625, 1802.0, 83080.0);
+	flowmeter_init(&Flowmeter_Outlet, 500, 3.90625, 1802.0, 83080.0);
 	//starting timers
 	HAL_TIM_Base_Start_IT(&htim1);
 	HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1);
@@ -193,8 +196,6 @@ int main(void) {
 	//init again because beep
 	stepper_init_parameters(&Stepper_1, 200, 80, 10000, 0);
 	stepper_init_positions(&Stepper_1, positions);
-
-	uint32_t adc_leackage = 0;
 
 	//make stepper move
 	stepper_set_drivefreq_high(&Stepper_1);
@@ -233,6 +234,23 @@ int main(void) {
 			HAL_GPIO_WritePin(debug_2_GPIO_Port, debug_2_Pin, SET);
 		}
 
+		 if (1) {
+		 if (flowmeter_get_flow(&Flowmeter_Outlet) > 1.0) {
+		 HAL_GPIO_WritePin(debug_1_GPIO_Port, debug_1_Pin, SET);
+		 } else {
+		 HAL_GPIO_WritePin(debug_1_GPIO_Port, debug_1_Pin, RESET);
+
+		 }
+		 }
+
+		 if (1) {
+		 if (flowmeter_get_flow(&Flowmeter_Regeneration) > 1.0) {
+		 HAL_GPIO_WritePin(debug_1_GPIO_Port, debug_1_Pin, SET);
+		 } else {
+		 HAL_GPIO_WritePin(debug_1_GPIO_Port, debug_1_Pin, RESET);
+
+		 }
+		 }
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
@@ -777,11 +795,11 @@ static void MX_GPIO_Init(void) {
 /* USER CODE BEGIN 4 */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 	if (GPIO_Pin == TWZ_Input_1_Pin) {
-		TWZ_1_pulseCount++;
-		HAL_GPIO_TogglePin(debug_1_GPIO_Port, debug_1_Pin);
+		flowmeter_add_pulse(&Flowmeter_Regeneration);
+		//HAL_GPIO_TogglePin(debug_1_GPIO_Port, debug_1_Pin);
 	}
 	if (GPIO_Pin == TWZ_Input_2_Pin) {
-		TWZ_2_pulseCount++;
+		flowmeter_add_pulse(&Flowmeter_Outlet);
 		//HAL_GPIO_TogglePin(debug_2_GPIO_Port, debug_2_Pin);
 	}
 }
@@ -806,6 +824,66 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+
+	static uint16_t ramp_i = 20;          // zählt 0..100
+	static uint16_t start_psc = 500;      // langsam (anpassen!)
+	static uint16_t target_psc = 1;      // wird beim Start übernommen
+
+	if (htim->Instance == TIM1) {
+		if (beep == 1) {
+
+			// Rampe killen: sofort Zielgeschwindigkeit
+
+			if (freq_counter >= Stepper_1.drive_psc) {
+				stepper_tick(&Stepper_1);
+				freq_counter = 0;
+			} else {
+				freq_counter++;
+			}
+
+		} else {
+			// Start der Rampe
+			if (Stepper_1.start_sequence == 1) {
+				target_psc = Stepper_1.drive_psc;  // Ziel merken
+				Stepper_1.drive_psc = start_psc;   // langsam starten
+				ramp_i = 0;
+				Stepper_1.start_sequence = 0;
+			}
+
+			// Step-Auslösung über Divider
+			if (freq_counter >= Stepper_1.drive_psc) {
+				stepper_tick(&Stepper_1);
+				freq_counter = 1;
+
+				// Rampe: nach JEDEM Schritt 100x schneller werden
+				if (ramp_i < 20) {
+					// linear von start_psc -> target_psc
+					Stepper_1.drive_psc = start_psc
+							- ((start_psc - target_psc) * ramp_i) / 20;
+					ramp_i++;
+				} else {
+					Stepper_1.drive_psc = target_psc; // fertig
+				}
+			} else {
+				freq_counter++;
+			}
+		}
+
+		if (flowmeter_outlet_counter >= Flowmeter_Outlet.psc) {
+			flowmeter_calc_flow(&Flowmeter_Outlet);
+			flowmeter_outlet_counter = 0;
+		} else {
+			flowmeter_outlet_counter++;
+		}
+
+		if (flowmeter_regeneration_counter >= Flowmeter_Regeneration.psc) {
+			flowmeter_calc_flow(&Flowmeter_Regeneration);
+			flowmeter_regeneration_counter = 0;
+		} else {
+			flowmeter_regeneration_counter++;
+		}
+
+	}
 	if (htim->Instance == TIM2) {
 		HAL_TIM_Base_Stop_IT(&htim2);
 		__HAL_TIM_SET_COUNTER(&htim2, 0);
