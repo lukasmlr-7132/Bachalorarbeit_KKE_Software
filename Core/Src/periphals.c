@@ -66,7 +66,9 @@ GBStatus stepper_init_hardware(stepper *self, const StepperPins *pins) {
 
 	self->current_recent = 0;
 	self->current_last = 0;
-	self->current_diff = 0;
+	self->current_diff_1 = 0;
+	self->current_diff_2 = 0;
+	self->current_diff_3 = 0;
 	self->current_sum = 0;
 	self->stall_limit = 0;
 

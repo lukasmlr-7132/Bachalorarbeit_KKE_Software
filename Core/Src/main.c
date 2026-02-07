@@ -25,6 +25,8 @@
 #include "ModbusRTU_Logic.h"
 #include "ModbusRTU_Comm.h"
 #include "periphals.h"
+#include <stdint.h>
+#include <stdlib.h>
 
 /* USER CODE END Includes */
 
@@ -58,9 +60,8 @@ UART_HandleTypeDef huart4;
 
 /* USER CODE BEGIN PV */
 volatile uint32_t heartbeat_counter = 0;
+
 volatile uint32_t freq_counter = 0;
-volatile uint32_t TWZ_1_pulseCount = 0;
-volatile uint32_t TWZ_2_pulseCount = 0;
 
 extern uint8_t beep;
 stepper Stepper_1;
@@ -194,12 +195,13 @@ int main(void) {
 	stepper_sound(&Stepper_1);
 
 	//init again because beep
-	stepper_init_parameters(&Stepper_1, 200, 80, 10000, 0);
+	stepper_init_parameters(&Stepper_1, 200, 80, 10000, 100);
 	stepper_init_positions(&Stepper_1, positions);
 
 	//make stepper move
 	stepper_set_drivefreq_high(&Stepper_1);
-	stepper_set_target(&Stepper_1, 3);
+	//stepper_set_target(&Stepper_1, 3);
+	stepper_reference(&Stepper_1);
 
 	/* USER CODE END 2 */
 
@@ -219,9 +221,9 @@ int main(void) {
 		 adc_leackage = HAL_ADC_GetValue(&hadc2);
 		 */
 		if (conductivity_level_reached(&Leackage)) {
-			HAL_GPIO_WritePin(debug_3_GPIO_Port, debug_3_Pin, RESET);
+			HAL_GPIO_WritePin(debug_2_GPIO_Port, debug_2_Pin, RESET);
 		} else {
-			HAL_GPIO_WritePin(debug_3_GPIO_Port, debug_3_Pin, SET);
+			HAL_GPIO_WritePin(debug_2_GPIO_Port, debug_2_Pin, SET);
 		}
 		/*
 		 HAL_ADC_Start(&hadc3);
@@ -234,23 +236,29 @@ int main(void) {
 			HAL_GPIO_WritePin(debug_2_GPIO_Port, debug_2_Pin, SET);
 		}
 
-		 if (1) {
-		 if (flowmeter_get_flow(&Flowmeter_Outlet) > 1.0) {
-		 HAL_GPIO_WritePin(debug_1_GPIO_Port, debug_1_Pin, SET);
-		 } else {
-		 HAL_GPIO_WritePin(debug_1_GPIO_Port, debug_1_Pin, RESET);
+		if (1) {
+			if (flowmeter_get_flow(&Flowmeter_Outlet) > 1.0) {
+				HAL_GPIO_WritePin(debug_1_GPIO_Port, debug_1_Pin, SET);
+			} else {
+				HAL_GPIO_WritePin(debug_1_GPIO_Port, debug_1_Pin, RESET);
 
-		 }
-		 }
+			}
+		}
 
-		 if (1) {
-		 if (flowmeter_get_flow(&Flowmeter_Regeneration) > 1.0) {
-		 HAL_GPIO_WritePin(debug_1_GPIO_Port, debug_1_Pin, SET);
-		 } else {
-		 HAL_GPIO_WritePin(debug_1_GPIO_Port, debug_1_Pin, RESET);
+		if (1) {
+			if (flowmeter_get_flow(&Flowmeter_Regeneration) > 1.0) {
+				HAL_GPIO_WritePin(debug_1_GPIO_Port, debug_1_Pin, SET);
+			} else {
+				HAL_GPIO_WritePin(debug_1_GPIO_Port, debug_1_Pin, RESET);
 
-		 }
-		 }
+			}
+		}
+
+		if (Stepper_1.current_sum > Stepper_1.stall_limit) {
+			HAL_GPIO_WritePin(debug_3_GPIO_Port, debug_3_Pin, SET);
+		} else {
+			HAL_GPIO_WritePin(debug_3_GPIO_Port, debug_3_Pin, RESET);
+		}
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
@@ -828,16 +836,30 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	static uint16_t ramp_i = 20;          // zählt 0..100
 	static uint16_t start_psc = 500;      // langsam (anpassen!)
 	static uint16_t target_psc = 1;      // wird beim Start übernommen
+	static uint32_t current = 0;      // wird beim Start übernommen
 
 	if (htim->Instance == TIM1) {
-		if (beep == 1) {
+		if (beep == 1 || Stepper_1.mode == STEPPER_REFERENCING) {
 
 			// Rampe killen: sofort Zielgeschwindigkeit
-
 			if (freq_counter >= Stepper_1.drive_psc) {
 				stepper_tick(&Stepper_1);
 				freq_counter = 0;
+
 			} else {
+				if (freq_counter == (Stepper_1.drive_psc / 2)) {
+					Stepper_1.current_last = Stepper_1.current_recent;
+					Stepper_1.current_recent = HAL_ADC_GetValue(&hadc3);
+					Stepper_1.current_diff_3 = Stepper_1.current_diff_2;
+					Stepper_1.current_diff_2 = Stepper_1.current_diff_1;
+					Stepper_1.current_diff_1 =
+							(int32_t) Stepper_1.current_recent
+									- (int32_t) Stepper_1.current_last;
+					Stepper_1.current_sum = labs(Stepper_1.current_diff_1)
+							+ labs(Stepper_1.current_diff_2)
+							+ labs(Stepper_1.current_diff_3);
+					current = Stepper_1.current_sum;
+				}
 				freq_counter++;
 			}
 
@@ -863,10 +885,12 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 					ramp_i++;
 				} else {
 					Stepper_1.drive_psc = target_psc; // fertig
+
 				}
 			} else {
 				freq_counter++;
 			}
+
 		}
 
 		if (flowmeter_outlet_counter >= Flowmeter_Outlet.psc) {

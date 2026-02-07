@@ -48,7 +48,9 @@ typedef struct {
 	// current tracking
 	uint32_t current_recent;
 	uint32_t current_last;
-	uint32_t current_diff;
+	int32_t current_diff_1;
+	int32_t current_diff_2;
+	int32_t current_diff_3;
 	uint32_t current_sum;
 	uint32_t stall_limit;
 
